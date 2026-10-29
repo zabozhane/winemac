@@ -1,0 +1,366 @@
+#!/bin/zsh
+# winemac: run Windows games on Apple Silicon through Wine, one isolated bottle per app.
+# Everything (Wine runtime, bottles, caches, logs) lives inside the folder this repo is cloned to.
+
+emulate -L zsh
+setopt err_exit no_unset pipe_fail
+
+typeset -r WINEMAC_ROOT=${0:A:h:h}
+typeset -r RUNTIME_DIR=$WINEMAC_ROOT/runtime
+typeset -r BOTTLES_DIR=$WINEMAC_ROOT/bottles
+typeset -r CACHE_DIR=$WINEMAC_ROOT/cache
+typeset -r STATE_DIR=$WINEMAC_ROOT/state
+typeset -r LOGS_DIR=$WINEMAC_ROOT/logs
+
+# Homebrew disabled its wine casks on 2026-09-01 because they fail the Gatekeeper check,
+# so we download the same upstream build (Gcenx/macOS_Wine_builds) directly and pin its hash.
+typeset -r WINE_BUILD_URL=https://github.com/Gcenx/macOS_Wine_builds/releases/download/11.0_1/wine-stable-11.0_1-osx64.tar.xz
+typeset -r WINE_BUILD_SHA256=b50dc50ec7f41d58b115a6b685d4d1315ba3c797bd3aa0f49213f2703cb82388
+typeset -r WINE_BIN_DIR="$RUNTIME_DIR/Wine Stable.app/Contents/Resources/wine/bin"
+
+typeset -ra BREW_PACKAGES=(winetricks)   # pulls cabextract and p7zip, which winetricks needs
+typeset -ra DEFAULT_DEPS=(d3dx9 vcrun2005 vcrun2008)
+typeset -r BREW_INSTALLED_LIST=$STATE_DIR/brew-installed.txt
+typeset -r LAST_RUN_MARKER=$STATE_DIR/last-run.marker
+
+# ---------- output ----------
+
+info() { print -r -- "==> $*" }
+warn() { print -ru2 -- "winemac: warning: $*" }
+die()  { print -ru2 -- "winemac: error: $*"; exit 1 }
+
+usage() {
+  cat <<EOF
+Usage: winemac <command> [args]
+
+  setup                         Install Rosetta 2, winetricks (Homebrew) and the pinned Wine build
+  doctor                        Check the environment and every bottle
+  create  <bottle>              Create an isolated Wine prefix
+  deps    <bottle> [verbs...]   Install winetricks verbs (default: ${DEFAULT_DEPS[*]})
+  import  <bottle> <dir> <exe>  Copy a game folder into the bottle; <exe> is relative to <dir>
+  run     <bottle> [args...]    Launch the imported exe
+  stop    <bottle>              Kill every Wine process of the bottle
+  list                          List bottles
+  audit                         List files changed in \$HOME outside winemac since the last run
+  uninstall                     Show everything winemac created, then delete it
+
+Root: $WINEMAC_ROOT
+EOF
+}
+
+# ---------- environment isolation ----------
+
+# Redirect every cache/config location Wine, winetricks and Homebrew would put in $HOME.
+export_isolated_env() {
+  export XDG_CACHE_HOME=$CACHE_DIR/xdg
+  export XDG_CONFIG_HOME=$STATE_DIR/xdg-config
+  export XDG_DATA_HOME=$STATE_DIR/xdg-data
+  export HOMEBREW_CACHE=$CACHE_DIR/homebrew
+  export HOMEBREW_LOGS=$LOGS_DIR/homebrew
+  export WINETRICKS_LATEST_VERSION_CHECK=disabled
+  # winemenubuilder would create launchers and file associations outside the prefix.
+  export WINEDLLOVERRIDES="winemenubuilder.exe=d${WINEDLLOVERRIDES:+;$WINEDLLOVERRIDES}"
+  export WINEDEBUG=${WINEDEBUG:--all}
+  export WINE=$WINE_BIN_DIR/wine
+  path=("$WINE_BIN_DIR" /opt/homebrew/bin $path)
+}
+
+# ---------- bottles ----------
+
+validate_bottle_name() {
+  local name=$1
+  [[ $name =~ '^[A-Za-z0-9][A-Za-z0-9._-]*$' ]] || die "invalid bottle name '$name' (use letters, digits, . _ -)"
+}
+
+bottle_dir()    { print -r -- "$BOTTLES_DIR/$1" }
+bottle_prefix() { print -r -- "$BOTTLES_DIR/$1/prefix" }
+
+# Selects the bottle for the following wine/winetricks calls.
+use_bottle() {
+  local name=$1
+  validate_bottle_name "$name"
+  [[ -d $(bottle_prefix "$name") ]] || die "bottle '$name' does not exist (winemac create $name)"
+  export WINEPREFIX=$(bottle_prefix "$name")
+}
+
+require_wine() {
+  [[ -x $WINE ]] || die "Wine is not installed (run: winemac setup)"
+}
+
+# ---------- setup ----------
+
+is_apple_silicon() {
+  [[ $(uname -s) == Darwin && $(uname -m) == arm64 ]]
+}
+
+require_apple_silicon() {
+  is_apple_silicon || die "winemac targets macOS on Apple Silicon"
+}
+
+rosetta_is_installed() {
+  arch -x86_64 /usr/bin/true 2>/dev/null
+}
+
+ensure_rosetta() {
+  if rosetta_is_installed; then
+    info "Rosetta 2: installed"
+    return
+  fi
+  info "Installing Rosetta 2 (the Wine build is x86_64; this is a system component, it lives outside winemac)"
+  sudo softwareupdate --install-rosetta --agree-to-license
+  rosetta_is_installed || die "Rosetta 2 installation did not succeed"
+}
+
+ensure_homebrew() {
+  (( $+commands[brew] )) && return
+  die 'Homebrew is not installed. Install it from https://brew.sh:
+  /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+then run: winemac setup'
+}
+
+# Records only formulae that this setup added, so uninstall never removes the user's own packages.
+ensure_brew_packages() {
+  local -a before after added
+  before=(${(f)"$(brew list --formula -1)"})
+  info "Homebrew: installing ${BREW_PACKAGES[*]}"
+  brew install --formula $BREW_PACKAGES
+  after=(${(f)"$(brew list --formula -1)"})
+  added=(${after:|before})
+  (( $#added )) && print -rl -- $added >> $BREW_INSTALLED_LIST
+  return 0
+}
+
+ensure_wine() {
+  if [[ -x $WINE ]]; then
+    info "Wine: $("$WINE" --version)"
+    return
+  fi
+  local archive=$CACHE_DIR/downloads/${WINE_BUILD_URL:t}
+  info "Downloading ${WINE_BUILD_URL:t}"
+  curl -fL --retry 3 -o "$archive.part" "$WINE_BUILD_URL"
+  local actual_sha256=${$(shasum -a 256 "$archive.part")[1]}
+  if [[ $actual_sha256 != $WINE_BUILD_SHA256 ]]; then
+    rm -f -- "$archive.part"
+    die "checksum mismatch for ${WINE_BUILD_URL:t}: expected $WINE_BUILD_SHA256, got $actual_sha256"
+  fi
+  mv -- "$archive.part" "$archive"
+  info "Extracting into $RUNTIME_DIR"
+  tar -xJf "$archive" -C "$RUNTIME_DIR"
+  rm -f -- "$archive"
+  info "Wine: $("$WINE" --version)"
+}
+
+cmd_setup() {
+  require_apple_silicon
+  ensure_rosetta
+  ensure_homebrew
+  ensure_brew_packages
+  ensure_wine
+  info "Setup complete. Next: winemac create <bottle>"
+}
+
+# ---------- doctor ----------
+
+typeset -i doctor_failures=0
+
+check() {
+  local label=$1; shift
+  if "$@" >/dev/null 2>&1; then
+    print -r -- "  [ok]   $label"
+  else
+    print -r -- "  [FAIL] $label"
+    doctor_failures+=1
+  fi
+}
+
+has_command() { (( $+commands[$1] )) }
+wine_runs()   { "$WINE" --version }
+
+# Wine links Desktop/Documents/Downloads/... in drive_c/users to the real $HOME on prefix creation.
+prefix_has_no_home_links() {
+  local prefix=$1 link
+  for link in "$prefix"/drive_c/users/*/**/*(N@); do
+    [[ $(readlink -- "$link") == $HOME/* ]] && return 1
+  done
+  return 0
+}
+
+prefix_has_no_root_drive()        { [[ ! -e $1/dosdevices/z: ]] }
+prefix_disables_winemenubuilder() { grep -q '"winemenubuilder.exe"=""' "$1/user.reg" }
+
+cmd_doctor() {
+  print -r -- "System (macOS $(sw_vers -productVersion 2>/dev/null || print unknown))"
+  check "Apple Silicon"       is_apple_silicon
+  check "Rosetta 2"           rosetta_is_installed
+  check "Homebrew"            has_command brew
+  check "winetricks"          has_command winetricks
+  check "cabextract"          has_command cabextract
+  check "Wine runtime"        wine_runs
+
+  local prefix name
+  for prefix in $BOTTLES_DIR/*/prefix(N/); do
+    name=${prefix:h:t}
+    print -r -- "Bottle $name"
+    check "no links into \$HOME"           prefix_has_no_home_links "$prefix"
+    check "no Z: drive mapped to /"        prefix_has_no_root_drive "$prefix"
+    check "winemenubuilder disabled"       prefix_disables_winemenubuilder "$prefix"
+    check "exe imported"                   test -f "$(bottle_dir $name)/exe"
+  done
+
+  (( doctor_failures == 0 )) || die "$doctor_failures check(s) failed"
+  info "All checks passed"
+}
+
+# ---------- bottle commands ----------
+
+cmd_create() {
+  (( $# == 1 )) || die "usage: winemac create <bottle>"
+  local name=$1
+  validate_bottle_name "$name"
+  require_wine
+  local prefix=$(bottle_prefix "$name")
+  [[ ! -e $prefix ]] || die "bottle '$name' already exists"
+  mkdir -p "$prefix"
+  export WINEPREFIX=$prefix
+
+  info "Initialising prefix $prefix"
+  "$WINE" wineboot --init
+  wineserver -w
+  # Persist the override in the registry so the bottle stays safe even if started without winemac.
+  "$WINE" reg add 'HKCU\Software\Wine\DllOverrides' /v winemenubuilder.exe /t REG_SZ /d '' /f
+  # sandbox: replaces links to $HOME with real folders and unmaps Z: (the whole Mac filesystem).
+  winetricks -q sandbox
+  wineserver -w
+  info "Bottle '$name' created. Next: winemac deps $name"
+}
+
+cmd_deps() {
+  (( $# >= 1 )) || die "usage: winemac deps <bottle> [verbs...]"
+  local name=$1; shift
+  use_bottle "$name"
+  require_wine
+  local -a verbs=("$@")
+  (( $#verbs )) || verbs=($DEFAULT_DEPS)
+  info "Installing into '$name': ${verbs[*]}"
+  winetricks -q $verbs
+  wineserver -w
+}
+
+cmd_import() {
+  (( $# == 3 )) || die "usage: winemac import <bottle> <game-dir> <exe-relative-to-game-dir>"
+  local name=$1 source_dir=${2:A} exe_relative=$3
+  use_bottle "$name"
+  [[ -d $source_dir ]] || die "not a directory: $source_dir"
+  [[ -f $source_dir/$exe_relative ]] || die "exe not found: $source_dir/$exe_relative"
+
+  local game_dir_relative=Games/${source_dir:t}
+  local destination=$WINEPREFIX/drive_c/$game_dir_relative
+  [[ ! -e $destination ]] || die "already imported: $destination"
+
+  info "Copying $source_dir -> $destination"
+  mkdir -p "${destination:h}"
+  ditto "$source_dir" "$destination"
+  print -r -- "$game_dir_relative/$exe_relative" > "$(bottle_dir $name)/exe"
+  info "Imported. Next: winemac run $name"
+}
+
+cmd_run() {
+  (( $# >= 1 )) || die "usage: winemac run <bottle> [args...]"
+  local name=$1; shift
+  use_bottle "$name"
+  require_wine
+  local exe_file=$(bottle_dir $name)/exe
+  [[ -f $exe_file ]] || die "nothing imported into '$name' (winemac import $name <dir> <exe>)"
+  local exe=$WINEPREFIX/drive_c/$(<$exe_file)
+  [[ -f $exe ]] || die "exe is missing: $exe"
+
+  local log=$LOGS_DIR/$name.log
+  touch "$LAST_RUN_MARKER"
+  info "Starting $exe (log: $log)"
+  # Games such as the L2 client resolve their data files relative to the working directory.
+  cd "${exe:h}"
+  "$WINE" "${exe:t}" "$@" >>"$log" 2>&1
+}
+
+cmd_stop() {
+  (( $# == 1 )) || die "usage: winemac stop <bottle>"
+  use_bottle "$1"
+  require_wine
+  wineserver -k
+}
+
+cmd_list() {
+  local dir exe
+  for dir in $BOTTLES_DIR/*(N/); do
+    exe=-
+    [[ -f $dir/exe ]] && exe=$(<$dir/exe)
+    print -r -- "${dir:t}  $exe"
+  done
+}
+
+cmd_audit() {
+  [[ -f $LAST_RUN_MARKER ]] || die "no run recorded yet (winemac run <bottle>)"
+  info "Files in \$HOME changed since the last run, outside $WINEMAC_ROOT:"
+  info "(macOS itself writes to ~/Library all the time; look for Wine/winetricks related paths)"
+  # Permission errors from privacy-protected folders are expected and not relevant here.
+  find "$HOME" -path "$WINEMAC_ROOT" -prune -o \( -type f -o -type l \) -newer "$LAST_RUN_MARKER" -print 2>/dev/null || true
+}
+
+# ---------- uninstall ----------
+
+recorded_brew_packages() {
+  [[ -f $BREW_INSTALLED_LIST ]] || return 0
+  local package
+  for package in ${(fu)"$(<$BREW_INSTALLED_LIST)"}; do
+    brew list --formula "$package" >/dev/null 2>&1 && print -r -- "$package"
+  done
+  return 0
+}
+
+stop_all_bottles() {
+  [[ -x $WINE ]] || return 0
+  local prefix
+  for prefix in $BOTTLES_DIR/*/prefix(N/); do
+    # wineserver -k fails when no server is running for the prefix, which is the normal case.
+    WINEPREFIX=$prefix wineserver -k 2>/dev/null || true
+  done
+}
+
+cmd_uninstall() {
+  [[ -x $WINEMAC_ROOT/bin/winemac && $WINEMAC_ROOT != $HOME && $WINEMAC_ROOT != / ]] \
+    || die "refusing to delete unexpected root: $WINEMAC_ROOT"
+
+  local -a packages=(${(f)"$(recorded_brew_packages)"})
+  print -r -- "This will permanently delete:"
+  du -sh -- $WINEMAC_ROOT/*(DN) | sed 's/^/  /'
+  (( $#packages )) && print -r -- "  Homebrew formulae installed by winemac: ${packages[*]}"
+  print -r -- "Not touched: Homebrew itself and Rosetta 2 (system components)."
+
+  local answer
+  read -r "answer?Delete everything listed above? [y/N] "
+  [[ $answer == [yY] ]] || { info "Cancelled"; return 0 }
+
+  stop_all_bottles
+  if (( $#packages )); then
+    brew uninstall --formula $packages || die "brew uninstall failed; nothing else was deleted"
+  fi
+  cd /
+  rm -rf -- "$WINEMAC_ROOT"
+  info "Deleted $WINEMAC_ROOT"
+}
+
+# ---------- entry point ----------
+
+main() {
+  (( $# )) || { usage; exit 1 }
+  local command=$1; shift
+  mkdir -p $RUNTIME_DIR $BOTTLES_DIR $CACHE_DIR/downloads $STATE_DIR $LOGS_DIR
+  export_isolated_env
+  case $command in
+    setup|doctor|create|deps|import|run|stop|list|audit|uninstall) cmd_$command "$@" ;;
+    -h|--help|help) usage ;;
+    *) usage >&2; die "unknown command: $command" ;;
+  esac
+}
+
+main "$@"

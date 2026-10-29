@@ -4,7 +4,7 @@ import WinemacCore
 struct ContentView: View {
     @Bindable var library: LibraryModel
     @State private var addGame: AddGameModel?
-    @State private var uninstall: UninstallModel?
+    @State private var uninstall: DeletionModel?
 
     var body: some View {
         NavigationSplitView {
@@ -12,6 +12,7 @@ struct ContentView: View {
         } detail: {
             if let bottle = library.selectedBottle {
                 BottleDetailView(library: library, bottle: bottle)
+                    .id(bottle.name)
             } else {
                 ContentUnavailableView {
                     Label("Игр пока нет", systemImage: "gamecontroller")
@@ -57,7 +58,7 @@ struct ContentView: View {
         }
         .safeAreaInset(edge: .bottom) {
             Button("Удалить всё…", role: .destructive) {
-                uninstall = UninstallModel(cli: library.cli)
+                uninstall = DeletionModel(cli: library.cli, arguments: ["uninstall"])
             }
             .buttonStyle(.borderless)
             .foregroundStyle(.red)
@@ -80,4 +81,3 @@ struct ContentView: View {
 }
 
 extension AddGameModel: Identifiable {}
-extension UninstallModel: Identifiable {}

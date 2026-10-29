@@ -2,28 +2,32 @@ import Foundation
 import Observation
 import WinemacCore
 
-/// Drives `winemac uninstall`: shows the CLI's own listing, then answers its y/N prompt.
+/// Drives a deleting CLI command (`uninstall`, `remove <bottle>`): shows its own listing, then answers its y/N prompt.
 @MainActor
 @Observable
-final class UninstallModel {
+final class DeletionModel: Identifiable {
     enum Phase { case loading, confirming, deleting, deleted, cancelled, failed }
 
     private let cli: WinemacCLI
+    private let arguments: [String]
     private var process: CLIProcess?
     private var remainingLines: AsyncStream<String>.Iterator?
     private(set) var phase = Phase.loading
-    private(set) var plan = UninstallPlan()
+    /// What the command printed before asking for confirmation.
+    private(set) var listing: [String] = []
     private(set) var log: [String] = []
 
-    init(cli: WinemacCLI) {
+    init(cli: WinemacCLI, arguments: [String]) {
         self.cli = cli
+        self.arguments = arguments
     }
 
-    func loadPlan() async {
+    var plan: UninstallPlan { UninstallPlan.parse(listing) }
+
+    func loadListing() async {
         do {
-            let process = try cli.start(["uninstall"])
+            let process = try cli.start(arguments)
             self.process = process
-            var listing: [String] = []
             var iterator = process.lines.makeAsyncIterator()
             while let line = await iterator.next() {
                 listing.append(line)
@@ -31,7 +35,6 @@ final class UninstallModel {
             }
             remainingLines = iterator
             log = listing
-            plan = UninstallPlan.parse(listing)
             phase = .confirming
         } catch {
             log = [error.localizedDescription]

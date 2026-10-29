@@ -4,7 +4,6 @@ import WinemacCore
 struct ContentView: View {
     @Bindable var library: LibraryModel
     @State private var addGame: AddGameModel?
-    @State private var uninstall: DeletionModel?
 
     var body: some View {
         NavigationSplitView {
@@ -32,9 +31,6 @@ struct ContentView: View {
         .sheet(item: $addGame, onDismiss: { Task { await library.refresh() } }) { model in
             AddGameView(model: model)
         }
-        .sheet(item: $uninstall) { model in
-            UninstallView(model: model)
-        }
         .alert("Ошибка", isPresented: errorIsShown) {
             Button("OK") { library.errorMessage = nil }
         } message: {
@@ -55,18 +51,6 @@ struct ContentView: View {
                 .buttonStyle(.borderless)
             }
             ServerSection()
-        }
-        .safeAreaInset(edge: .bottom) {
-            // Worded and placed apart from the games so it is not mistaken for deleting the selected game.
-            Button("Удалить winemac полностью…", role: .destructive) {
-                uninstall = DeletionModel(cli: library.cli, command: .uninstallEverything)
-            }
-            .font(.caption)
-            .buttonStyle(.borderless)
-            .foregroundStyle(.red)
-            .disabled(library.runningBottleName != nil)
-            .padding()
-            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .navigationSplitViewColumnWidth(min: 200, ideal: 230)
     }

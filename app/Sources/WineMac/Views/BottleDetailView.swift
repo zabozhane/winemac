@@ -5,7 +5,7 @@ import WinemacCore
 struct BottleDetailView: View {
     let library: LibraryModel
     let bottle: Bottle
-    @State private var removal: DeletionModel?
+    @State private var removal: RemoveBottleModel?
 
     private var isRunning: Bool { library.runningBottleName == bottle.name }
 
@@ -21,7 +21,7 @@ struct BottleDetailView: View {
         .padding(28)
         .navigationTitle(bottle.name)
         .sheet(item: $removal, onDismiss: { Task { await library.loadBottles() } }) { model in
-            RemoveBottleView(model: model, bottleName: bottle.name)
+            RemoveBottleView(model: model)
         }
     }
 
@@ -38,7 +38,7 @@ struct BottleDetailView: View {
             }
             Spacer()
             Button("Удалить игру…", systemImage: "trash", role: .destructive) {
-                removal = DeletionModel(cli: library.cli, command: .removeBottle(bottle.name))
+                removal = RemoveBottleModel(cli: library.cli, bottleName: bottle.name)
             }
             .controlSize(.large)
             .disabled(isRunning)

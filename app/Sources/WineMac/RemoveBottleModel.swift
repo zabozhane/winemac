@@ -2,14 +2,14 @@ import Foundation
 import Observation
 import WinemacCore
 
-/// Drives a deleting CLI command (`uninstall`, `remove <bottle>`): shows its own listing, then answers its y/N prompt.
+/// Drives `winemac remove <bottle>`: shows the CLI's own listing, then answers its y/N prompt.
 @MainActor
 @Observable
-final class DeletionModel: Identifiable {
+final class RemoveBottleModel: Identifiable {
     enum Phase { case loading, confirming, deleting, deleted, cancelled, failed }
 
     private let cli: WinemacCLI
-    let command: DeletionCommand
+    let bottleName: String
     private var process: CLIProcess?
     private var remainingLines: AsyncStream<String>.Iterator?
     private(set) var phase = Phase.loading
@@ -17,21 +17,21 @@ final class DeletionModel: Identifiable {
     private(set) var listing: [String] = []
     private(set) var log: [String] = []
 
-    init(cli: WinemacCLI, command: DeletionCommand) {
+    init(cli: WinemacCLI, bottleName: String) {
         self.cli = cli
-        self.command = command
+        self.bottleName = bottleName
     }
 
-    var plan: UninstallPlan { UninstallPlan.parse(listing) }
+    var parsedListing: DeletionListing { DeletionListing.parse(listing) }
 
     func loadListing() async {
         do {
-            let process = try cli.start(command.arguments)
+            let process = try cli.start(BottleRemoval.arguments(forBottle: bottleName))
             self.process = process
             var iterator = process.lines.makeAsyncIterator()
             while let line = await iterator.next() {
                 listing.append(line)
-                if UninstallPlan.isLastLine(line) { break }
+                if DeletionListing.isLastLine(line) { break }
             }
             remainingLines = iterator
             log = listing

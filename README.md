@@ -33,6 +33,26 @@ git clone https://github.com/zabozhane/winemac.git ~/winemac
 | `audit` | Файлы в `$HOME`, изменённые после последнего `run`, вне `~/winemac` |
 | `uninstall` | Показывает всё, что будет удалено (с размерами), спрашивает подтверждение, удаляет |
 
+## Приложение WineMac.app
+
+Тонкая SwiftUI-оболочка над `bin/winemac`: каждая кнопка вызывает команду CLI, логика остаётся в скрипте.
+
+```zsh
+~/winemac/app/build-app.sh        # нужен Swift 5.9+ (Command Line Tools); собирает ~/winemac/WineMac.app
+open ~/winemac/WineMac.app
+```
+
+| В приложении | Команда |
+|---|---|
+| Список игр | `list` |
+| Состояние | `doctor` |
+| Добавить игру | `create` (если бутылки нет) → `deps` → `import` |
+| Играть / Стоп | `run` / `stop` |
+| Проверить изоляцию | `audit` |
+| Удалить всё | `uninstall` (список берётся из вывода CLI, ответ на `[y/N]` уходит в stdin) |
+
+Приложение ищет `bin/winemac` рядом с собой, поэтому `.app` лежит в корне `~/winemac`. Кэши SwiftPM при сборке тоже пишутся в `cache/swiftpm`. Тесты разбора вывода CLI: `swift test --package-path ~/winemac/app`.
+
 ## Структура
 
 ```
@@ -47,9 +67,11 @@ git clone https://github.com/zabozhane/winemac.git ~/winemac
   state/brew-installed.txt       formulae added by setup (uninstall removes only these)
   state/last-run.marker          reference point for audit
   logs/                          per-bottle logs, HOMEBREW_LOGS
+  app/                           SwiftUI app sources (this repo)
+  WineMac.app/                   built by app/build-app.sh
 ```
 
-Всё, кроме `bin/`, `README.md` и `.gitignore`, создаётся скриптом и лежит в `.gitignore`.
+Всё, кроме `bin/`, `app/`, `README.md` и `.gitignore`, создаётся скриптами и лежит в `.gitignore`.
 
 ## Изоляция
 

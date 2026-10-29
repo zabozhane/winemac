@@ -4,3 +4,6 @@
 /cache/
 /state/
 /logs/
+# Created by app/build-app.sh
+/app/.build/
+/WineMac.app/

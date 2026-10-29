@@ -42,6 +42,7 @@ Usage: winemac <command> [args]
   run     <bottle> [args...]    Launch the imported exe
   stop    <bottle>              Kill every Wine process of the bottle
   renderer <bottle> [gl|vulkan] Print or set the Direct3D backend (applies on next launch)
+  remove  <bottle>              Show what the bottle holds, then delete it with its game and log
   list                          List bottles
   audit                         List files changed in \$HOME outside winemac since the last run
   uninstall                     Show everything winemac created, then delete it
@@ -331,7 +332,37 @@ cmd_audit() {
   find "$HOME" -path "$WINEMAC_ROOT" -prune -o \( -type f -o -type l \) -newer "$LAST_RUN_MARKER" -print 2>/dev/null || true
 }
 
-# ---------- uninstall ----------
+# ---------- removal ----------
+
+# Reads the answer from stdin, so the app can confirm by writing "y".
+confirmed() {
+  local answer
+  read -r "answer?$1 [y/N] "
+  [[ $answer == [yY] ]]
+}
+
+cmd_remove() {
+  (( $# == 1 )) || die "usage: winemac remove <bottle>"
+  local name=$1
+  use_bottle "$name"
+  local dir=$(bottle_dir "$name") log=$LOGS_DIR/$name.log
+
+  print -r -- "This will permanently delete bottle '$name':"
+  du -sh -- "$dir" | sed 's/^/  /'
+  [[ -f $dir/exe ]] && print -r -- "  game inside it: C:/$(<$dir/exe)"
+  [[ -f $log ]] && print -r -- "  log: $log"
+  print -r -- "Not touched: the Wine runtime, other bottles, the winetricks download cache."
+  confirmed "Delete bottle '$name'?" || { info "Cancelled"; return 0 }
+
+  if [[ -x $WINE ]]; then
+    # wineserver -k fails when no server is running for the prefix, which is the normal case.
+    wineserver -k 2>/dev/null || true
+  fi
+  rm -rf -- "$dir"
+  rm -f -- "$log"
+  info "Deleted bottle '$name'"
+}
+
 
 recorded_brew_packages() {
   [[ -f $BREW_INSTALLED_LIST ]] || return 0
@@ -361,9 +392,7 @@ cmd_uninstall() {
   (( $#packages )) && print -r -- "  Homebrew formulae installed by winemac: ${packages[*]}"
   print -r -- "Not touched: Homebrew itself and Rosetta 2 (system components)."
 
-  local answer
-  read -r "answer?Delete everything listed above? [y/N] "
-  [[ $answer == [yY] ]] || { info "Cancelled"; return 0 }
+  confirmed "Delete everything listed above?" || { info "Cancelled"; return 0 }
 
   stop_all_bottles
   if (( $#packages )); then
@@ -382,7 +411,7 @@ main() {
   mkdir -p $RUNTIME_DIR $BOTTLES_DIR $CACHE_DIR/downloads $STATE_DIR $LOGS_DIR
   export_isolated_env
   case $command in
-    setup|doctor|create|deps|import|run|stop|renderer|list|audit|uninstall) cmd_$command "$@" ;;
+    setup|doctor|create|deps|import|run|stop|renderer|remove|list|audit|uninstall) cmd_$command "$@" ;;
     -h|--help|help) usage ;;
     *) usage >&2; die "unknown command: $command" ;;
   esac

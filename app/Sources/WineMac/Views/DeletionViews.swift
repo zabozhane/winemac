@@ -1,5 +1,4 @@
 import SwiftUI
-import AppKit
 import WinemacCore
 
 /// Shared confirmation sheet for commands that list what they delete and then ask y/N.
@@ -71,8 +70,9 @@ struct UninstallView: View {
 
     var body: some View {
         DeletionSheet(model: model, title: "Удалить всё, что создал winemac?", confirmTitle: "Удалить всё",
-                      // The app bundle itself was inside the deleted folder.
-                      deletedTitle: "Закрыть winemac", onDeleted: { NSApp.terminate(nil) }) {
+                      // The app bundle itself was inside the deleted folder, so there is nothing left to save.
+                      // NSApp.terminate would be refused while this sheet is still presented.
+                      deletedTitle: "Закрыть winemac", onDeleted: { exit(0) }) {
             let plan = model.plan
             Text("Игры будут остановлены.").foregroundStyle(.secondary)
             SizedPaths(items: plan.items)

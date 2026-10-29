@@ -25,6 +25,11 @@ public struct ServerStatus: Equatable {
     public struct Entry: Equatable {
         public let state: State
         public let detail: String
+
+        public init(state: State, detail: String) {
+            self.state = state
+            self.detail = detail
+        }
     }
 
     public var entries: [Component: Entry]

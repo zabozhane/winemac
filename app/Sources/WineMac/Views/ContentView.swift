@@ -50,7 +50,7 @@ struct ContentView: View {
                 }
                 .buttonStyle(.borderless)
             }
-            ServerSection()
+            ServerSection(library: library)
         }
         .navigationSplitViewColumnWidth(min: 200, ideal: 230)
     }

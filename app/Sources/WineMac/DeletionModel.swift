@@ -9,7 +9,7 @@ final class DeletionModel: Identifiable {
     enum Phase { case loading, confirming, deleting, deleted, cancelled, failed }
 
     private let cli: WinemacCLI
-    private let arguments: [String]
+    let command: DeletionCommand
     private var process: CLIProcess?
     private var remainingLines: AsyncStream<String>.Iterator?
     private(set) var phase = Phase.loading
@@ -17,16 +17,16 @@ final class DeletionModel: Identifiable {
     private(set) var listing: [String] = []
     private(set) var log: [String] = []
 
-    init(cli: WinemacCLI, arguments: [String]) {
+    init(cli: WinemacCLI, command: DeletionCommand) {
         self.cli = cli
-        self.arguments = arguments
+        self.command = command
     }
 
     var plan: UninstallPlan { UninstallPlan.parse(listing) }
 
     func loadListing() async {
         do {
-            let process = try cli.start(arguments)
+            let process = try cli.start(command.arguments)
             self.process = process
             var iterator = process.lines.makeAsyncIterator()
             while let line = await iterator.next() {

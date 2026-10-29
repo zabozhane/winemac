@@ -52,7 +52,7 @@ open ~/winemac/WineMac.app
 | Рендер OpenGL / Vulkan | `renderer` |
 | Проверить изоляцию | `audit` |
 | Удалить игру | `remove` (так же: список из вывода CLI, подтверждение в stdin) |
-| Удалить всё | `uninstall` (список берётся из вывода CLI, ответ на `[y/N]` уходит в stdin) |
+| Удалить winemac полностью (нужно ввести «удалить всё») | `uninstall` (список берётся из вывода CLI, ответ на `[y/N]` уходит в stdin) |
 
 Приложение ищет `bin/winemac` рядом с собой, поэтому `.app` лежит в корне `~/winemac`. Кэши SwiftPM при сборке тоже пишутся в `cache/swiftpm`. Настройки и сохранённое состояние окон, которые macOS пишет за любое приложение в `~/Library`, перенаправлены в `state/app-home` через `CFFIXED_USER_HOME` (проверка: `winemac audit` после запуска приложения). Тесты разбора вывода CLI: `swift test --package-path ~/winemac/app`.
 

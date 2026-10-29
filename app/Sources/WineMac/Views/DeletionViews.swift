@@ -10,6 +10,7 @@ struct DeletionSheet<Listing: View>: View {
     let onDeleted: () -> Void
     @ViewBuilder let listing: () -> Listing
     @Environment(\.dismiss) private var dismiss
+    @State private var typedConfirmation = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -35,6 +36,10 @@ struct DeletionSheet<Listing: View>: View {
             VStack(alignment: .leading, spacing: 10) {
                 Text("Отменить удаление нельзя.").foregroundStyle(.secondary)
                 listing()
+                if let phrase = model.command.confirmationPhrase {
+                    TextField("Чтобы подтвердить, введите «\(phrase)»", text: $typedConfirmation)
+                        .textFieldStyle(.roundedBorder)
+                }
             }
         case .deleting, .deleted, .failed, .cancelled:
             LogView(lines: model.log).frame(height: 220)
@@ -54,6 +59,7 @@ struct DeletionSheet<Listing: View>: View {
                 Button(confirmTitle, role: .destructive) { Task { await model.confirm() } }
                     .tint(.red)
                     .buttonStyle(.borderedProminent)
+                    .disabled(!model.command.isConfirmed(byTyping: typedConfirmation))
             case .deleted:
                 Button(deletedTitle, action: onDeleted)
                     .keyboardShortcut(.defaultAction)
@@ -69,12 +75,13 @@ struct UninstallView: View {
     let model: DeletionModel
 
     var body: some View {
-        DeletionSheet(model: model, title: "Удалить всё, что создал winemac?", confirmTitle: "Удалить всё",
+        DeletionSheet(model: model, title: "Удалить winemac полностью?", confirmTitle: "Удалить всё",
                       // The app bundle itself was inside the deleted folder, so there is nothing left to save.
                       // NSApp.terminate would be refused while this sheet is still presented.
                       deletedTitle: "Закрыть winemac", onDeleted: { exit(0) }) {
             let plan = model.plan
-            Text("Игры будут остановлены.").foregroundStyle(.secondary)
+            Text("Удалятся ВСЕ игры, Wine, логи и само приложение. Чтобы удалить одну игру, используйте «Удалить игру…» на её экране.")
+                .foregroundStyle(.red)
             SizedPaths(items: plan.items)
             if !plan.homebrewFormulae.isEmpty {
                 Text("Формулы Homebrew, которые поставил winemac: \(plan.homebrewFormulae.joined(separator: ", "))")

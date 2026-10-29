@@ -57,9 +57,11 @@ struct ContentView: View {
             ServerSection()
         }
         .safeAreaInset(edge: .bottom) {
-            Button("Удалить всё…", role: .destructive) {
-                uninstall = DeletionModel(cli: library.cli, arguments: ["uninstall"])
+            // Worded and placed apart from the games so it is not mistaken for deleting the selected game.
+            Button("Удалить winemac полностью…", role: .destructive) {
+                uninstall = DeletionModel(cli: library.cli, command: .uninstallEverything)
             }
+            .font(.caption)
             .buttonStyle(.borderless)
             .foregroundStyle(.red)
             .disabled(library.runningBottleName != nil)

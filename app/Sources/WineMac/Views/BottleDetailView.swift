@@ -20,12 +20,6 @@ struct BottleDetailView: View {
         }
         .padding(28)
         .navigationTitle(bottle.name)
-        .toolbar {
-            Button("Удалить игру…", systemImage: "trash", role: .destructive) {
-                removal = DeletionModel(cli: library.cli, arguments: ["remove", bottle.name])
-            }
-            .disabled(isRunning)
-        }
         .sheet(item: $removal, onDismiss: { Task { await library.loadBottles() } }) { model in
             RemoveBottleView(model: model, bottleName: bottle.name)
         }
@@ -43,6 +37,11 @@ struct BottleDetailView: View {
                 rendererPicker
             }
             Spacer()
+            Button("Удалить игру…", systemImage: "trash", role: .destructive) {
+                removal = DeletionModel(cli: library.cli, command: .removeBottle(bottle.name))
+            }
+            .controlSize(.large)
+            .disabled(isRunning)
             if isRunning {
                 Button(role: .destructive) {
                     Task { await library.stop(bottle) }

@@ -14,6 +14,9 @@ final class LibraryModel {
     private(set) var runningBottleName: String?
     private(set) var runStartedAt: Date?
     private(set) var renderers: [String: Renderer] = [:]
+    private(set) var server: ServerStatus?
+    /// True while `server up` or `server down` runs; their output goes to the log panel.
+    private(set) var isChangingServer = false
     /// Output of the last command, shown in the log panel.
     private(set) var log: [String] = []
     var errorMessage: String?
@@ -80,6 +83,37 @@ final class LibraryModel {
 
     func stop(_ bottle: Bottle) async {
         await runReportingErrors(["stop", bottle.name])
+    }
+
+    func refreshServer() async {
+        // Polled in the background: a failing status call must not raise an alert every few seconds.
+        guard let result = try? await cli.run(["server", "status"]) else { return }
+        server = ServerStatus.parse(result.lines)
+    }
+
+    func startServer() async {
+        await changeServer("up")
+    }
+
+    func stopServer() async {
+        await changeServer("down")
+    }
+
+    private func changeServer(_ command: String) async {
+        guard !isChangingServer else { return }
+        isChangingServer = true
+        defer { isChangingServer = false }
+        log = []
+        do {
+            let process = try cli.start(["server", command])
+            for await line in process.lines { log.append(line) }
+            if await process.waitForExit() != 0 {
+                errorMessage = log.last ?? "winemac server \(command) завершился с ошибкой"
+            }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+        await refreshServer()
     }
 
     func audit() async {

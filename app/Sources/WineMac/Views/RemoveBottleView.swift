@@ -30,7 +30,7 @@ struct RemoveBottleView: View {
             ProgressView("Считаю, что будет удалено…")
         case .confirming:
             VStack(alignment: .leading, spacing: 10) {
-                Text("Отменить удаление нельзя.").foregroundStyle(.secondary)
+                Text("Бутылка и лог переместятся в Корзину, оттуда их можно вернуть.").foregroundStyle(.secondary)
                 SizedPaths(items: model.parsedListing.items)
                 ForEach(details, id: \.self) { Text($0).font(.callout.monospaced()) }
                 Text("Не трогаем: Wine, другие игры и кэш загрузок winetricks. Папка, из которой импортировали игру, остаётся на месте.")

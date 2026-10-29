@@ -23,14 +23,16 @@ typeset -r BINARY=$(swift build --package-path "$APP_DIR" --scratch-path "$BUILD
 
 rm -rf -- "$BUNDLE"
 mkdir -p "$APP_HOME"
-mkdir -p "$BUNDLE/Contents/MacOS"
+mkdir -p "$BUNDLE/Contents/MacOS" "$BUNDLE/Contents/Resources"
 cp -- "$BINARY" "$BUNDLE/Contents/MacOS/WineMac"
+cp -- "$APP_DIR/Resources/AppIcon.icns" "$BUNDLE/Contents/Resources/AppIcon.icns"
 cat > "$BUNDLE/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
   <key>CFBundleExecutable</key><string>WineMac</string>
+  <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundleIdentifier</key><string>local.winemac</string>
   <key>CFBundleName</key><string>WineMac</string>
   <key>CFBundlePackageType</key><string>APPL</string>

@@ -30,6 +30,11 @@ git clone https://github.com/zabozhane/winemac.git ~/winemac
 | `run <bottle> [args]` | Запускает exe из его каталога, лог в `logs/<bottle>.log` |
 | `stop <bottle>` | `wineserver -k` для бутылки |
 | `renderer <bottle> [gl\|vulkan]` | Без значения печатает текущий бэкенд Direct3D (`gl` по умолчанию); со значением пишет `HKCU\Software\Wine\Direct3D\renderer`, действует со следующего запуска |
+| `server attach <bottle> <dir>` | Связывает бутылку с серверным проектом на `docker compose` (например `~/Projects/l2aiserver`): перед `run` сервер поднимается, клиент стартует только когда сервер готов |
+| `server detach <bottle>` | Бутылка снова запускается без сервера |
+| `server status` | Состояние Docker, MariaDB, login, game и Ollama: `ready`, `starting`, `stopped`, `failed`, `unavailable` |
+| `server up` / `server down` | `docker compose up -d` с ожиданием готовности / `docker compose stop` (контейнеры и данные остаются) |
+| `server logs [db\|login\|game]` | Последние 100 строк логов сервера |
 | `remove <bottle>` | Показывает размер бутылки, игру внутри и лог, спрашивает подтверждение, перекладывает бутылку и её лог в Корзину; Wine, другие бутылки и кэш winetricks не трогает |
 | `list` | Список бутылок и их exe |
 | `audit` | Файлы в `$HOME`, изменённые после последнего `run`, вне `~/winemac` |
@@ -52,11 +57,25 @@ open ~/winemac/WineMac.app
 | Играть / Стоп | `run` / `stop` |
 | Рендер OpenGL / Vulkan | `renderer` |
 | Проверить изоляцию | `audit` |
+| Блок «Локальный сервер» | `server status` раз в 3 с, кнопки `server up` / `server down` |
 | Удалить игру | `remove` (список берётся из вывода CLI, ответ на `[y/N]` уходит в stdin) |
 
 Полное удаление (`uninstall`) намеренно есть только в CLI: в приложении его путали с удалением одной игры.
 
 Приложение ищет `bin/winemac` рядом с собой, поэтому `.app` лежит в корне `~/winemac`. Кэши SwiftPM при сборке тоже пишутся в `cache/swiftpm`. Настройки и сохранённое состояние окон, которые macOS пишет за любое приложение в `~/Library`, перенаправлены в `state/app-home` через `CFFIXED_USER_HOME` (проверка: `winemac audit` после запуска приложения). Тесты разбора вывода CLI: `swift test --package-path ~/winemac/app`.
+
+## Локальный сервер
+
+```zsh
+~/winemac/bin/winemac server attach l2 ~/Projects/l2aiserver
+~/winemac/bin/winemac run l2      # поднимет сервер, дождётся готовности, потом запустит клиент
+```
+
+- Сервер не входит в winemac: это отдельный проект на `docker compose` (OrbStack). winemac его только запускает и опрашивает, серверный проект не меняет.
+- Порядок: OrbStack (запускается, если выключен) → `docker compose up -d` → MariaDB `healthy` → login на 127.0.0.1:2106 прислал Init-пакет → в логе game текущего запуска есть `Registered as server`. Не дождались за `SERVER_START_TIMEOUT` секунд или сервис упал — клиент не запускается, печатаются последние строки лога.
+- После выхода из игры сервер продолжает работать. Чтобы останавливать его вместе с клиентом, поставь `SERVER_STOP_ON_EXIT=yes`.
+- Ollama пока показывается как `not configured`: она появится, когда будет в compose-файле сервера.
+- Настройки в `state/server.conf` (`SERVER_DIR`, `SERVER_BOTTLES`, `SERVER_START_TIMEOUT=300`, `SERVER_STOP_ON_EXIT=no`). Приложение из Finder не видит PATH шелла, поэтому `docker` ищется в `$DOCKER`, `~/.orbstack/bin`, `/usr/local/bin`, `/opt/homebrew/bin`.
 
 ## Структура
 
@@ -69,6 +88,7 @@ open ~/winemac/WineMac.app
   cache/xdg/                     XDG_CACHE_HOME (winetricks downloads)
   cache/homebrew/                HOMEBREW_CACHE
   state/xdg-config, xdg-data/    XDG_CONFIG_HOME, XDG_DATA_HOME
+  state/server.conf              local server folder, linked bottles, timeout
   state/brew-installed.txt       formulae added by setup (uninstall removes only these)
   state/last-run.marker          reference point for audit
   logs/                          per-bottle logs, HOMEBREW_LOGS

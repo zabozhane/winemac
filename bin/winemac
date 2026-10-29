@@ -42,6 +42,10 @@ Usage: winemac <command> [args]
   run     <bottle> [args...]    Launch the imported exe
   stop    <bottle>              Kill every Wine process of the bottle
   renderer <bottle> [gl|vulkan] Print or set the Direct3D backend (applies on next launch)
+  server attach <bottle> <dir>  Start the docker compose server in <dir> before the bottle runs
+  server detach <bottle>        Run the bottle without the server
+  server status|up|down         Show component states, start and wait until ready, stop
+  server logs [db|login|game]   Last lines of the server logs
   remove  <bottle>              Show what the bottle holds, then delete it with its game and log
   list                          List bottles
   audit                         List files changed in \$HOME outside winemac since the last run
@@ -277,12 +281,24 @@ cmd_run() {
   local exe=$WINEPREFIX/drive_c/$(<$exe_file)
   [[ -f $exe ]] || die "exe is missing: $exe"
 
+  load_server_conf
+  local with_server=no
+  bottle_uses_server "$name" && with_server=yes
+  # The client cannot log in without the server, so it is not launched until the server is ready.
+  [[ $with_server == yes ]] && server_up
+
   local log=$LOGS_DIR/$name.log
   touch "$LAST_RUN_MARKER"
   info "Starting $exe (log: $log)"
   # Games such as the L2 client resolve their data files relative to the working directory.
   cd "${exe:h}"
-  "$WINE" "${exe:t}" "$@" >>"$log" 2>&1
+  local -i exit_code=0
+  "$WINE" "${exe:t}" "$@" >>"$log" 2>&1 || exit_code=$?
+  # The server keeps running by default: the game server takes minutes to start.
+  if [[ $with_server == yes && ${server_conf[SERVER_STOP_ON_EXIT]} == yes ]]; then
+    server_down
+  fi
+  return $exit_code
 }
 
 cmd_stop() {
@@ -330,6 +346,262 @@ cmd_audit() {
   info "(macOS itself writes to ~/Library all the time; look for Wine/winetricks related paths)"
   # Permission errors from privacy-protected folders are expected and not relevant here.
   find "$HOME" -path "$WINEMAC_ROOT" -prune -o \( -type f -o -type l \) -newer "$LAST_RUN_MARKER" -print 2>/dev/null || true
+}
+
+# ---------- local server ----------
+
+# The game server is a separate docker compose project (e.g. ~/Projects/l2aiserver); winemac only
+# starts it before a linked bottle runs and reports its state. It never removes containers or volumes.
+typeset -r SERVER_CONF=$STATE_DIR/server.conf
+typeset -r SERVER_READY_LINE='Registered as server'   # printed by the aCis game server once login accepts it
+typeset -ri SERVER_POLL_SECONDS=2
+typeset -ri ENGINE_START_TIMEOUT=60
+typeset -ra SERVER_COMPONENTS=(docker mariadb login game ollama)
+
+typeset -gA server_conf
+typeset -g DOCKER_BIN=''
+
+load_server_conf() {
+  server_conf=(SERVER_DIR '' SERVER_BOTTLES '' SERVER_START_TIMEOUT 300 SERVER_STOP_ON_EXIT no)
+  [[ -f $SERVER_CONF ]] || return 0
+  local line
+  # Parsed as key=value rather than sourced, so the file can never run code.
+  for line in ${(f)"$(<$SERVER_CONF)"}; do
+    [[ $line =~ '^[A-Z_]+=' ]] && server_conf[${line%%=*}]=${line#*=}
+  done
+  return 0
+}
+
+save_server_conf() {
+  local key
+  for key in ${(ok)server_conf}; do
+    print -r -- "$key=${server_conf[$key]}"
+  done > $SERVER_CONF
+}
+
+bottle_uses_server() {
+  (( ${${(s: :)server_conf[SERVER_BOTTLES]}[(Ie)$1]} ))
+}
+
+# Apps started from Finder do not get the shell's PATH, so the usual install locations are probed.
+find_docker() {
+  local candidate
+  for candidate in ${DOCKER:-} $HOME/.orbstack/bin/docker /usr/local/bin/docker /opt/homebrew/bin/docker; do
+    [[ -x $candidate ]] && { print -r -- $candidate; return 0 }
+  done
+  return 1
+}
+
+# Sets DOCKER_BIN; Docker's credential helpers and compose plugin live next to it.
+use_docker() {
+  DOCKER_BIN=$(find_docker) || die "docker CLI not found (install OrbStack or set DOCKER=/path/to/docker)"
+  path=("${DOCKER_BIN:h}" $path)
+}
+
+require_server_dir() {
+  [[ -n ${server_conf[SERVER_DIR]} ]] || die "no server attached (winemac server attach <bottle> <dir>)"
+  [[ -d ${server_conf[SERVER_DIR]} ]] || die "server folder is missing: ${server_conf[SERVER_DIR]}"
+}
+
+compose() { (cd "${server_conf[SERVER_DIR]}" && "$DOCKER_BIN" compose "$@") }
+
+engine_is_running() { "$DOCKER_BIN" info >/dev/null 2>&1 }
+
+ensure_engine() {
+  engine_is_running && return 0
+  local app
+  for app in OrbStack Docker; do
+    [[ -d /Applications/$app.app ]] || continue
+    info "Starting $app"
+    open -ga $app
+    local -i waited=0
+    until engine_is_running; do
+      (( waited >= ENGINE_START_TIMEOUT )) && die "$app did not start within ${ENGINE_START_TIMEOUT}s"
+      sleep 1
+      (( waited += 1 ))
+    done
+    return 0
+  done
+  die "Docker is not running and neither OrbStack nor Docker Desktop is in /Applications"
+}
+
+# The login server greets every new connection with an Init packet, so a byte received means it is ready.
+# A published port can accept the connection before Java listens, which is why the bare connect is not enough.
+login_greets() {
+  zmodload zsh/net/tcp zsh/system
+  ztcp 127.0.0.1 2106 2>/dev/null || return 1
+  local -i fd=$REPLY
+  local byte
+  local -i read_status=0
+  sysread -t 2 -s 1 -i $fd byte 2>/dev/null || read_status=$?
+  ztcp -c $fd
+  return $read_status
+}
+
+game_registered() {
+  local container=$1 started
+  started=$("$DOCKER_BIN" inspect -f '{{.State.StartedAt}}' $container 2>/dev/null) || return 1
+  # Captured instead of piped into grep -q, which would break the pipe under pipe_fail.
+  local output=$("$DOCKER_BIN" logs --since "$started" $container 2>&1)
+  [[ $output == *$SERVER_READY_LINE* ]]
+}
+
+# Prints one "component<TAB>state<TAB>detail" line per component.
+# States: ready, starting, stopped, failed, unavailable (not configured or Docker is off).
+server_status_lines() {
+  local -A state detail
+  local component
+  for component in $SERVER_COMPONENTS; do
+    state[$component]=unavailable detail[$component]=''
+  done
+
+  if [[ -z ${server_conf[SERVER_DIR]} ]]; then
+    for component in $SERVER_COMPONENTS; do detail[$component]='no server attached'; done
+  elif [[ ! -d ${server_conf[SERVER_DIR]} ]]; then
+    detail[docker]="server folder is missing: ${server_conf[SERVER_DIR]}"
+  elif ! DOCKER_BIN=$(find_docker); then
+    detail[docker]='docker CLI not found'
+  elif ! engine_is_running; then
+    state[docker]=stopped
+  else
+    state[docker]=ready
+    state[mariadb]=stopped state[login]=stopped state[game]=stopped
+
+    local line service container_state health exit_code name
+    local -A container_of
+    # One container per service; --all keeps exited ones so a crash shows as failed, not stopped.
+    for line in ${(f)"$(compose ps --all --format '{{.Service}}|{{.State}}|{{.Health}}|{{.ExitCode}}|{{.Name}}' 2>/dev/null)"}; do
+      IFS='|' read -r service container_state health exit_code name <<< "$line"
+      component=$service
+      [[ $service == db ]] && component=mariadb
+      if [[ $service == db-init ]]; then
+        if [[ $container_state == exited && $exit_code != 0 ]]; then
+          state[mariadb]=failed detail[mariadb]="db-init exited with code $exit_code"
+        fi
+        continue
+      fi
+      (( ${SERVER_COMPONENTS[(Ie)$component]} )) || continue
+      [[ $state[$component] == failed ]] && continue
+      container_of[$component]=$name
+      case $container_state in
+        running)
+          state[$component]=starting
+          [[ $health == unhealthy ]] && state[$component]=failed detail[$component]=unhealthy ;;
+        restarting) state[$component]=starting detail[$component]='restarting after a crash' ;;
+        exited|dead)
+          state[$component]=stopped
+          # 143/137: SIGTERM/SIGKILL from docker compose stop, i.e. stopped on purpose.
+          [[ $exit_code == (0|137|143) ]] || state[$component]=failed detail[$component]="exited with code $exit_code" ;;
+        *) state[$component]=stopped ;;
+      esac
+    done
+
+    if [[ $state[mariadb] == starting ]]; then
+      case $(compose ps --format '{{.Health}}' db 2>/dev/null) in
+        healthy) state[mariadb]=ready ;;
+        '') state[mariadb]=ready ;;   # no healthcheck defined: running is all we know
+      esac
+    fi
+    [[ $state[login] == starting ]] && login_greets && state[login]=ready
+    [[ $state[game] == starting ]] && game_registered ${container_of[game]} && state[game]=ready
+    # Ollama has no readiness probe yet: a running container is taken as ready.
+    [[ $state[ollama] == starting ]] && state[ollama]=ready
+    [[ -n ${container_of[ollama]:-} ]] || detail[ollama]='not configured'
+  fi
+
+  for component in $SERVER_COMPONENTS; do
+    print -r -- "$component	${state[$component]}	${detail[$component]}"
+  done
+}
+
+server_up() {
+  require_server_dir
+  use_docker
+  ensure_engine
+  info "Starting the server in ${server_conf[SERVER_DIR]}"
+  # Builds the image on the first start; waits for the database and its init job by itself.
+  compose up -d
+
+  local -i timeout=${server_conf[SERVER_START_TIMEOUT]} waited=0
+  local -A last_state
+  local line component state detail
+  while true; do
+    local -i pending=0
+    for line in ${(f)"$(server_status_lines)"}; do
+      IFS=$'\t' read -r component state detail <<< "$line"
+      [[ $component == (docker|ollama) ]] && continue
+      if [[ ${last_state[$component]:-} != $state ]]; then
+        info "$component: $state${detail:+ ($detail)}"
+        last_state[$component]=$state
+      fi
+      case $state in
+        ready) ;;
+        failed)
+          local service=$component
+          [[ $component == mariadb ]] && service=db
+          [[ $detail == db-init* ]] && service=db-init
+          compose logs --tail 20 $service || true
+          die "$component failed to start" ;;
+        *) (( pending += 1 )) ;;
+      esac
+    done
+    (( pending == 0 )) && break
+    (( waited >= timeout )) && die "server not ready after ${timeout}s (see: winemac server logs)"
+    sleep $SERVER_POLL_SECONDS
+    (( waited += SERVER_POLL_SECONDS ))
+  done
+  info "Server is ready"
+}
+
+server_down() {
+  require_server_dir
+  use_docker
+  engine_is_running || { info "Docker is not running; nothing to stop"; return 0 }
+  info "Stopping the server (containers and data are kept)"
+  compose stop
+}
+
+cmd_server() {
+  (( $# >= 1 )) || die "usage: winemac server attach|detach|status|up|down|logs"
+  local subcommand=$1; shift
+  load_server_conf
+  case $subcommand in
+    attach)
+      (( $# == 2 )) || die "usage: winemac server attach <bottle> <server-dir>"
+      local name=$1 dir=${2:A}
+      use_bottle "$name"
+      [[ -f $dir/docker-compose.yml || -f $dir/compose.yaml || -f $dir/compose.yml || -f $dir/docker-compose.yaml ]] \
+        || die "no docker compose file in $dir"
+      if [[ -n ${server_conf[SERVER_DIR]} && ${server_conf[SERVER_DIR]} != $dir ]]; then
+        warn "replacing server ${server_conf[SERVER_DIR]} with $dir for every attached bottle"
+      fi
+      server_conf[SERVER_DIR]=$dir
+      local -a bottles=(${(s: :)server_conf[SERVER_BOTTLES]} $name)
+      server_conf[SERVER_BOTTLES]=${(j: :)${(u)bottles}}
+      save_server_conf
+      info "Bottle '$name' now starts the server in $dir before the game (config: $SERVER_CONF)" ;;
+    detach)
+      (( $# == 1 )) || die "usage: winemac server detach <bottle>"
+      local -a bottles=(${(s: :)server_conf[SERVER_BOTTLES]})
+      server_conf[SERVER_BOTTLES]=${(j: :)bottles:#$1}
+      save_server_conf
+      info "Bottle '$1' no longer starts the server" ;;
+    status)
+      (( $# == 0 )) || die "usage: winemac server status"
+      server_status_lines ;;
+    up)
+      (( $# == 0 )) || die "usage: winemac server up"
+      server_up ;;
+    down)
+      (( $# == 0 )) || die "usage: winemac server down"
+      server_down ;;
+    logs)
+      (( $# <= 1 )) || die "usage: winemac server logs [db|login|game]"
+      require_server_dir
+      use_docker
+      compose logs --tail 100 "$@" ;;
+    *) die "unknown server command: $subcommand" ;;
+  esac
 }
 
 # ---------- removal ----------
@@ -422,7 +694,7 @@ main() {
   mkdir -p $RUNTIME_DIR $BOTTLES_DIR $CACHE_DIR/downloads $STATE_DIR $LOGS_DIR
   export_isolated_env
   case $command in
-    setup|doctor|create|deps|import|run|stop|renderer|remove|list|audit|uninstall) cmd_$command "$@" ;;
+    setup|doctor|create|deps|import|run|stop|renderer|server|remove|list|audit|uninstall) cmd_$command "$@" ;;
     -h|--help|help) usage ;;
     *) usage >&2; die "unknown command: $command" ;;
   esac

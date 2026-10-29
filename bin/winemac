@@ -334,6 +334,14 @@ cmd_audit() {
 
 # ---------- removal ----------
 
+# Deletions go to the Trash so a wrong click can be undone with Finder's Put Back.
+# /usr/bin/trash ships with macOS 15 and later.
+require_trash() {
+  [[ -x /usr/bin/trash ]] || die "/usr/bin/trash not found (needs macOS 15+); nothing was deleted"
+}
+
+move_to_trash() { /usr/bin/trash -- "$@" }
+
 # Reads the answer from stdin, so the app can confirm by writing "y".
 confirmed() {
   local answer
@@ -345,9 +353,10 @@ cmd_remove() {
   (( $# == 1 )) || die "usage: winemac remove <bottle>"
   local name=$1
   use_bottle "$name"
+  require_trash
   local dir=$(bottle_dir "$name") log=$LOGS_DIR/$name.log
 
-  print -r -- "This will permanently delete bottle '$name':"
+  print -r -- "This will move to the Trash bottle '$name':"
   du -sh -- "$dir" | sed 's/^/  /'
   [[ -f $dir/exe ]] && print -r -- "  game inside it: C:/$(<$dir/exe)"
   [[ -f $log ]] && print -r -- "  log: $log"
@@ -358,9 +367,10 @@ cmd_remove() {
     # wineserver -k fails when no server is running for the prefix, which is the normal case.
     wineserver -k 2>/dev/null || true
   fi
-  rm -rf -- "$dir"
-  rm -f -- "$log"
-  info "Deleted bottle '$name'"
+  local -a targets=("$dir")
+  [[ -f $log ]] && targets+=("$log")
+  move_to_trash $targets
+  info "Moved bottle '$name' to the Trash"
 }
 
 
@@ -385,9 +395,10 @@ stop_all_bottles() {
 cmd_uninstall() {
   [[ -x $WINEMAC_ROOT/bin/winemac && $WINEMAC_ROOT != $HOME && $WINEMAC_ROOT != / ]] \
     || die "refusing to delete unexpected root: $WINEMAC_ROOT"
+  require_trash
 
   local -a packages=(${(f)"$(recorded_brew_packages)"})
-  print -r -- "This will permanently delete:"
+  print -r -- "This will move to the Trash:"
   du -sh -- $WINEMAC_ROOT/*(DN) | sed 's/^/  /'
   (( $#packages )) && print -r -- "  Homebrew formulae installed by winemac: ${packages[*]}"
   print -r -- "Not touched: Homebrew itself and Rosetta 2 (system components)."
@@ -399,8 +410,8 @@ cmd_uninstall() {
     brew uninstall --formula $packages || die "brew uninstall failed; nothing else was deleted"
   fi
   cd /
-  rm -rf -- "$WINEMAC_ROOT"
-  info "Deleted $WINEMAC_ROOT"
+  move_to_trash "$WINEMAC_ROOT"
+  info "Moved $WINEMAC_ROOT to the Trash"
 }
 
 # ---------- entry point ----------

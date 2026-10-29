@@ -1,7 +1,7 @@
 import Foundation
 
-/// What `winemac uninstall` announces before it asks for confirmation.
-public struct UninstallPlan: Equatable {
+/// What `winemac remove` and `winemac uninstall` print before they ask for confirmation.
+public struct DeletionListing: Equatable {
     public struct Item: Equatable {
         public let size: String
         public let path: String
@@ -20,8 +20,8 @@ public struct UninstallPlan: Equatable {
     }
 
     /// Parses the listing: `du -sh` rows ("  <size>\t<path>"), the formulae row and the "Not touched" row.
-    public static func parse(_ lines: [String]) -> UninstallPlan {
-        var plan = UninstallPlan()
+    public static func parse(_ lines: [String]) -> DeletionListing {
+        var plan = DeletionListing()
         for line in lines {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             if trimmed.hasPrefix(formulaePrefix) {

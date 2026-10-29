@@ -84,7 +84,7 @@ public final class CLIProcess {
         try process.run()
     }
 
-    /// Answers a prompt of the command, e.g. the confirmation of `uninstall`.
+    /// Answers a prompt of the command, e.g. the confirmation of `remove`.
     public func send(_ text: String) {
         inputPipe.fileHandleForWriting.write(Data(text.utf8))
     }

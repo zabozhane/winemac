@@ -13,6 +13,7 @@ final class LibraryModel {
     private(set) var isChecking = false
     private(set) var runningBottleName: String?
     private(set) var runStartedAt: Date?
+    private(set) var renderers: [String: Renderer] = [:]
     /// Output of the last command, shown in the log panel.
     private(set) var log: [String] = []
     var errorMessage: String?
@@ -34,6 +35,19 @@ final class LibraryModel {
         guard let result = await runReportingErrors(["list"]) else { return }
         bottles = Bottle.parseList(result.lines)
         if selectedBottle == nil { selectedBottleName = bottles.first?.name }
+        for bottle in bottles { await loadRenderer(of: bottle) }
+    }
+
+    func loadRenderer(of bottle: Bottle) async {
+        guard let result = await runReportingErrors(["renderer", bottle.name]) else { return }
+        renderers[bottle.name] = Renderer.parse(result.lines)
+    }
+
+    /// Takes effect on the next launch; wined3d reads the setting when the game starts.
+    func setRenderer(_ renderer: Renderer, of bottle: Bottle) async {
+        guard renderers[bottle.name] != renderer else { return }
+        await runReportingErrors(["renderer", bottle.name, renderer.rawValue])
+        await loadRenderer(of: bottle)
     }
 
     func checkDoctor() async {

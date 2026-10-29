@@ -30,6 +30,7 @@ struct BottleDetailView: View {
                     .font(.callout.monospaced())
                     .foregroundStyle(.secondary)
                 statusLine
+                rendererPicker
             }
             Spacer()
             if isRunning {
@@ -53,6 +54,28 @@ struct BottleDetailView: View {
                 .disabled(bottle.executablePath == nil || library.runningBottleName != nil)
             }
         }
+    }
+
+    private var rendererPicker: some View {
+        Picker("Рендер", selection: rendererBinding) {
+            ForEach(Renderer.allCases) { renderer in
+                Text(renderer.title).tag(Optional(renderer))
+            }
+        }
+        .pickerStyle(.segmented)
+        .fixedSize()
+        .disabled(isRunning || library.renderers[bottle.name] == nil)
+        .help("Применяется при следующем запуске игры")
+    }
+
+    private var rendererBinding: Binding<Renderer?> {
+        Binding(
+            get: { library.renderers[bottle.name] },
+            set: { renderer in
+                guard let renderer else { return }
+                Task { await library.setRenderer(renderer, of: bottle) }
+            }
+        )
     }
 
     @ViewBuilder

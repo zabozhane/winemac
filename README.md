@@ -48,6 +48,7 @@ open ~/winemac/WineMac.app
 | Состояние | `doctor` |
 | Добавить игру | `create` (если бутылки нет) → `deps` → `import` |
 | Играть / Стоп | `run` / `stop` |
+| Рендер OpenGL / Vulkan | `renderer` |
 | Проверить изоляцию | `audit` |
 | Удалить всё | `uninstall` (список берётся из вывода CLI, ответ на `[y/N]` уходит в stdin) |
 

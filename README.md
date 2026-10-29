@@ -29,6 +29,7 @@ git clone https://github.com/zabozhane/winemac.git ~/winemac
 | `import <bottle> <dir> <exe>` | Копирует папку игры в `drive_c/Games/<имя папки>` и запоминает путь к exe |
 | `run <bottle> [args]` | Запускает exe из его каталога, лог в `logs/<bottle>.log` |
 | `stop <bottle>` | `wineserver -k` для бутылки |
+| `renderer <bottle> [gl\|vulkan]` | Без значения печатает текущий бэкенд Direct3D (`gl` по умолчанию); со значением пишет `HKCU\Software\Wine\Direct3D\renderer`, действует со следующего запуска |
 | `list` | Список бутылок и их exe |
 | `audit` | Файлы в `$HOME`, изменённые после последнего `run`, вне `~/winemac` |
 | `uninstall` | Показывает всё, что будет удалено (с размерами), спрашивает подтверждение, удаляет |

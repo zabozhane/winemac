@@ -67,7 +67,10 @@ export_isolated_env() {
   export WINETRICKS_LATEST_VERSION_CHECK=disabled
   # winemenubuilder would create launchers and file associations outside the prefix.
   export WINEDLLOVERRIDES="winemenubuilder.exe=d${WINEDLLOVERRIDES:+;$WINEDLLOVERRIDES}"
-  export WINEDEBUG=${WINEDEBUG:--all}
+  # Keep Wine's error lines (unhandled exceptions, missing DLLs) but drop the chatty fixme/warn/trace output.
+  export WINEDEBUG=${WINEDEBUG:--all,err+all}
+  # MoltenVK prints ~170 lines of device info on every launch; errors are all a crash report needs.
+  export MVK_CONFIG_LOG_LEVEL=${MVK_CONFIG_LOG_LEVEL:-1}
   export WINE=$WINE_BIN_DIR/wine
   path=("$WINE_BIN_DIR" /opt/homebrew/bin $path)
 }
@@ -271,6 +274,18 @@ cmd_import() {
   info "Imported. Next: winemac run $name"
 }
 
+# The exit status keeps only the low byte of the Windows exit code, so a crash with
+# 0xC0000005 (access violation) reaches us as 5.
+describe_exit_code() {
+  case $1 in
+    5)   print -r -- 'probably 0xC0000005, access violation: the game crashed' ;;
+    29)  print -r -- 'probably 0xC000001D, illegal instruction' ;;
+    253) print -r -- 'probably 0xC00000FD, stack overflow' ;;
+    <129-255>) print -r -- "killed by signal $(( $1 - 128 ))" ;;
+    *)   print -r -- 'game exited with an error' ;;
+  esac
+}
+
 cmd_run() {
   (( $# >= 1 )) || die "usage: winemac run <bottle> [args...]"
   local name=$1; shift
@@ -292,8 +307,12 @@ cmd_run() {
   info "Starting $exe (log: $log)"
   # Games such as the L2 client resolve their data files relative to the working directory.
   cd "${exe:h}"
-  local -i exit_code=0
+  print -r -- "==> $(date '+%Y-%m-%d %H:%M:%S') start ${exe:t}" >>"$log"
+  local -i exit_code=0 started=$SECONDS
   "$WINE" "${exe:t}" "$@" >>"$log" 2>&1 || exit_code=$?
+  local summary="$(date '+%Y-%m-%d %H:%M:%S') exit $exit_code after $(( SECONDS - started ))s"
+  (( exit_code )) && summary+=" ($(describe_exit_code $exit_code))"
+  print -r -- "==> $summary" >>"$log"
   # The server keeps running by default: the game server takes minutes to start.
   if [[ $with_server == yes && ${server_conf[SERVER_STOP_ON_EXIT]} == yes ]]; then
     server_down

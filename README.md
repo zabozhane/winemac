@@ -74,7 +74,7 @@ open ~/winemac/WineMac.app
 ```
 
 - Сервер не входит в winemac: это отдельный проект на `docker compose` (OrbStack). winemac его только запускает и опрашивает, серверный проект не меняет.
-- Порядок: OrbStack (запускается, если выключен) → `docker compose up -d` → MariaDB `healthy` → login на 127.0.0.1:2106 прислал Init-пакет → в логе game текущего запуска есть `Registered as server`. Не дождались за `SERVER_START_TIMEOUT` секунд или сервис упал — клиент не запускается, печатаются последние строки лога.
+- Порядок: OrbStack (запускается, если выключен) → `docker compose up -d` → MariaDB `healthy` → в логе login текущего запуска есть `Loginserver ready` → в логе game текущего запуска есть `Registered as server`. Не дождались за `SERVER_START_TIMEOUT` секунд или сервис упал — клиент не запускается, печатаются последние строки лога.
 - После выхода из игры сервер продолжает работать. Чтобы останавливать его вместе с клиентом, поставь `SERVER_STOP_ON_EXIT=yes`.
 - Ollama пока показывается как `not configured`: она появится, когда будет в compose-файле сервера.
 - Настройки в `state/server.conf` (`SERVER_DIR`, `SERVER_BOTTLES`, `SERVER_START_TIMEOUT=300`, `SERVER_STOP_ON_EXIT=no`). Приложение из Finder не видит PATH шелла, поэтому `docker` ищется в `$DOCKER`, `~/.orbstack/bin`, `/usr/local/bin`, `/opt/homebrew/bin`.

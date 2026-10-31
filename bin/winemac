@@ -353,6 +353,7 @@ cmd_audit() {
 # The game server is a separate docker compose project (e.g. ~/Projects/l2aiserver); winemac only
 # starts it before a linked bottle runs and reports its state. It never removes containers or volumes.
 typeset -r SERVER_CONF=$STATE_DIR/server.conf
+typeset -r LOGIN_READY_LINE='Loginserver ready'      # printed by the aCis login server once it listens
 typeset -r SERVER_READY_LINE='Registered as server'   # printed by the aCis game server once login accepts it
 typeset -ri SERVER_POLL_SECONDS=2
 typeset -ri ENGINE_START_TIMEOUT=60
@@ -425,25 +426,15 @@ ensure_engine() {
   die "Docker is not running and neither OrbStack nor Docker Desktop is in /Applications"
 }
 
-# The login server greets every new connection with an Init packet, so a byte received means it is ready.
-# A published port can accept the connection before Java listens, which is why the bare connect is not enough.
-login_greets() {
-  zmodload zsh/net/tcp zsh/system
-  ztcp 127.0.0.1 2106 2>/dev/null || return 1
-  local -i fd=$REPLY
-  local byte
-  local -i read_status=0
-  sysread -t 2 -s 1 -i $fd byte 2>/dev/null || read_status=$?
-  ztcp -c $fd
-  return $read_status
-}
-
-game_registered() {
-  local container=$1 started
+# Readiness comes from the container's log since its last start, never from connecting to 2106/7777:
+# aCis' IPv4Filter bans an IP after a few quick connections and every later attempt extends the ban,
+# and through Docker all host connections share one IP, so polling the port locked the client out.
+logged_since_start() {
+  local container=$1 line=$2 started
   started=$("$DOCKER_BIN" inspect -f '{{.State.StartedAt}}' $container 2>/dev/null) || return 1
   # Captured instead of piped into grep -q, which would break the pipe under pipe_fail.
   local output=$("$DOCKER_BIN" logs --since "$started" $container 2>&1)
-  [[ $output == *$SERVER_READY_LINE* ]]
+  [[ $output == *$line* ]]
 }
 
 # Prints one "component<TAB>state<TAB>detail" line per component.
@@ -502,8 +493,8 @@ server_status_lines() {
         '') state[mariadb]=ready ;;   # no healthcheck defined: running is all we know
       esac
     fi
-    [[ $state[login] == starting ]] && login_greets && state[login]=ready
-    [[ $state[game] == starting ]] && game_registered ${container_of[game]} && state[game]=ready
+    [[ $state[login] == starting ]] && logged_since_start ${container_of[login]} $LOGIN_READY_LINE && state[login]=ready
+    [[ $state[game] == starting ]] && logged_since_start ${container_of[game]} $SERVER_READY_LINE && state[game]=ready
     # Ollama has no readiness probe yet: a running container is taken as ready.
     [[ $state[ollama] == starting ]] && state[ollama]=ready
     [[ -n ${container_of[ollama]:-} ]] || detail[ollama]='not configured'

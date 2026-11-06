@@ -26,7 +26,7 @@ typeset -ra RENDERERS=(gl vulkan)   # wined3d backends; gl is Wine's default
 typeset -ra DISPLAY_MODES=(window fullscreen)
 # Windowed by default: a fullscreen game makes Wine's Mac driver capture every display,
 # which blacks out the other monitors until the game exits.
-typeset -r DEFAULT_DISPLAY="window 1600x1000"
+typeset -r DEFAULT_DISPLAY="window 1920x1080"
 
 # ---------- output ----------
 
@@ -407,7 +407,7 @@ cmd_display() {
       value=fullscreen ;;
     window)
       local size=${3:-${DEFAULT_DISPLAY#window }}
-      [[ $size =~ '^[1-9][0-9]{2,4}x[1-9][0-9]{2,4}$' ]] || die "invalid size '$size' (expected WxH, e.g. 1600x1000)"
+      [[ $size =~ '^[1-9][0-9]{2,4}x[1-9][0-9]{2,4}$' ]] || die "invalid size '$size' (expected WxH, e.g. 1920x1080)"
       value="window $size" ;;
     *) die "unknown display mode '$mode' (expected: ${DISPLAY_MODES[*]})" ;;
   esac

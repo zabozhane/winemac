@@ -23,6 +23,10 @@ typeset -ra DEFAULT_DEPS=(d3dx9 vcrun2005 vcrun2008)
 typeset -r BREW_INSTALLED_LIST=$STATE_DIR/brew-installed.txt
 typeset -r LAST_RUN_MARKER=$STATE_DIR/last-run.marker
 typeset -ra RENDERERS=(gl vulkan)   # wined3d backends; gl is Wine's default
+typeset -ra DISPLAY_MODES=(window fullscreen)
+# Windowed by default: a fullscreen game makes Wine's Mac driver capture every display,
+# which blacks out the other monitors until the game exits.
+typeset -r DEFAULT_DISPLAY="window 1600x1000"
 
 # ---------- output ----------
 
@@ -42,6 +46,8 @@ Usage: winemac <command> [args]
   run     <bottle> [args...]    Launch the imported exe
   stop    <bottle>              Kill every Wine process of the bottle
   renderer <bottle> [gl|vulkan] Print or set the Direct3D backend (applies on next launch)
+  display <bottle> [window [WxH]|fullscreen]
+                                Print or set how the game starts (default: $DEFAULT_DISPLAY)
   server attach <bottle> <dir>  Start the docker compose server in <dir> before the bottle runs
   server detach <bottle>        Run the bottle without the server
   server status|up|down         Show component states, start and wait until ready, stop
@@ -287,6 +293,8 @@ cmd_run() {
   # The client cannot log in without the server, so it is not launched until the server is ready.
   [[ $with_server == yes ]] && server_up
 
+  apply_display "$name" "${exe:h}"
+
   local log=$LOGS_DIR/$name.log
   touch "$LAST_RUN_MARKER"
   info "Starting $exe (log: $log)"
@@ -329,6 +337,82 @@ cmd_renderer() {
   (( ${RENDERERS[(Ie)$renderer]} )) || die "unknown renderer '$renderer' (expected: ${RENDERERS[*]})"
   # No wineserver -w: a running game would block it; the value is read at the next Direct3D start.
   "$WINE" reg add 'HKCU\Software\Wine\Direct3D' /v renderer /t REG_SZ /d "$renderer" /f
+}
+
+# ---------- display mode ----------
+
+# Prints "window <W>x<H>" or "fullscreen".
+current_display() {
+  local file=$(bottle_dir $1)/display
+  if [[ -f $file ]]; then print -r -- "$(<$file)"; else print -r -- "$DEFAULT_DISPLAY"; fi
+}
+
+# The L2 client reads the startup mode from system/Option.ini ([Video] StartupFullScreen and
+# GamePlayViewportX/Y) and rewrites the file on exit, so the bottle's setting is applied before
+# every launch. Other games have no Option.ini and are left alone.
+apply_display() {
+  local name=$1 exe_dir=$2
+  local option_ini=$exe_dir/Option.ini
+  local display=$(current_display $name)
+  local fullscreen=False width= height=
+  if [[ $display == fullscreen ]]; then
+    fullscreen=True
+  else
+    local size=${display#window }
+    width=${size%%x*} height=${size##*x}
+  fi
+  if [[ ! -f $option_ini ]]; then
+    [[ -f $exe_dir/l2.ini ]] || return 0   # not the L2 client (APFS is case-insensitive)
+    print -n -- "[Video]\r\n" > "$option_ini"
+  fi
+  local tmp=$option_ini.winemac
+  awk -v fs="$fullscreen" -v w="$width" -v h="$height" '
+    function emit_missing() {
+      if (!seen["StartupFullScreen"]) print "StartupFullScreen=" fs "\r"
+      if (w != "" && !seen["GamePlayViewportX"]) print "GamePlayViewportX=" w "\r"
+      if (h != "" && !seen["GamePlayViewportY"]) print "GamePlayViewportY=" h "\r"
+      done = 1
+    }
+    {
+      line = $0; sub(/\r$/, "", line)
+      if (line ~ /^\[/) {
+        if (in_video && !done) emit_missing()
+        in_video = (tolower(line) == "[video]")
+      } else if (in_video) {
+        key = line; sub(/=.*/, "", key)
+        if (key == "StartupFullScreen") { $0 = key "=" fs "\r"; seen[key] = 1 }
+        else if (key == "GamePlayViewportX" && w != "") { $0 = key "=" w "\r"; seen[key] = 1 }
+        else if (key == "GamePlayViewportY" && h != "") { $0 = key "=" h "\r"; seen[key] = 1 }
+      }
+      print
+    }
+    END { if (in_video && !done) emit_missing() }
+  ' "$option_ini" > "$tmp"
+  mv -f "$tmp" "$option_ini"
+  info "Display: $(current_display $name)"
+}
+
+cmd_display() {
+  (( $# >= 1 && $# <= 3 )) || die "usage: winemac display <bottle> [window [WxH]|fullscreen]"
+  local name=$1
+  use_bottle "$name"
+  if (( $# == 1 )); then
+    current_display "$name"
+    return
+  fi
+  local mode=$2 value
+  case $mode in
+    fullscreen)
+      (( $# == 2 )) || die "fullscreen takes no size"
+      value=fullscreen ;;
+    window)
+      local size=${3:-${DEFAULT_DISPLAY#window }}
+      [[ $size =~ '^[1-9][0-9]{2,4}x[1-9][0-9]{2,4}$' ]] || die "invalid size '$size' (expected WxH, e.g. 1600x1000)"
+      value="window $size" ;;
+    *) die "unknown display mode '$mode' (expected: ${DISPLAY_MODES[*]})" ;;
+  esac
+  print -r -- "$value" > "$(bottle_dir $name)/display"
+  print -r -- "$value"
 }
 
 cmd_list() {
@@ -694,7 +778,7 @@ main() {
   mkdir -p $RUNTIME_DIR $BOTTLES_DIR $CACHE_DIR/downloads $STATE_DIR $LOGS_DIR
   export_isolated_env
   case $command in
-    setup|doctor|create|deps|import|run|stop|renderer|server|remove|list|audit|uninstall) cmd_$command "$@" ;;
+    setup|doctor|create|deps|import|run|stop|renderer|display|server|remove|list|audit|uninstall) cmd_$command "$@" ;;
     -h|--help|help) usage ;;
     *) usage >&2; die "unknown command: $command" ;;
   esac

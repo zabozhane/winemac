@@ -14,6 +14,7 @@ final class LibraryModel {
     private(set) var runningBottleName: String?
     private(set) var runStartedAt: Date?
     private(set) var renderers: [String: Renderer] = [:]
+    private(set) var displayModes: [String: DisplayMode] = [:]
     private(set) var server: ServerStatus?
     /// True while `server up` or `server down` runs; their output goes to the log panel.
     private(set) var isChangingServer = false
@@ -38,7 +39,10 @@ final class LibraryModel {
         guard let result = await runReportingErrors(["list"]) else { return }
         bottles = Bottle.parseList(result.lines)
         if selectedBottle == nil { selectedBottleName = bottles.first?.name }
-        for bottle in bottles { await loadRenderer(of: bottle) }
+        for bottle in bottles {
+            await loadRenderer(of: bottle)
+            await loadDisplayMode(of: bottle)
+        }
     }
 
     func loadRenderer(of bottle: Bottle) async {
@@ -51,6 +55,18 @@ final class LibraryModel {
         guard renderers[bottle.name] != renderer else { return }
         await runReportingErrors(["renderer", bottle.name, renderer.rawValue])
         await loadRenderer(of: bottle)
+    }
+
+    func loadDisplayMode(of bottle: Bottle) async {
+        guard let result = await runReportingErrors(["display", bottle.name]) else { return }
+        displayModes[bottle.name] = DisplayMode.parse(result.lines)
+    }
+
+    /// Takes effect on the next launch: `run` writes the mode into the game's settings before starting it.
+    func setDisplayMode(_ mode: DisplayMode, of bottle: Bottle) async {
+        guard displayModes[bottle.name] != mode else { return }
+        await runReportingErrors(["display", bottle.name, mode.rawValue])
+        await loadDisplayMode(of: bottle)
     }
 
     func checkDoctor() async {

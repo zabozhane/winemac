@@ -35,6 +35,7 @@ struct BottleDetailView: View {
                     .foregroundStyle(.secondary)
                 statusLine
                 rendererPicker
+                displayPicker
             }
             Spacer()
             Button("Удалить игру…", systemImage: "trash", role: .destructive) {
@@ -75,6 +76,28 @@ struct BottleDetailView: View {
         .fixedSize()
         .disabled(isRunning || library.renderers[bottle.name] == nil)
         .help("Применяется при следующем запуске игры")
+    }
+
+    private var displayPicker: some View {
+        Picker("Экран", selection: displayBinding) {
+            ForEach(DisplayMode.allCases) { mode in
+                Text(mode.title).tag(Optional(mode))
+            }
+        }
+        .pickerStyle(.segmented)
+        .fixedSize()
+        .disabled(isRunning || library.displayModes[bottle.name] == nil)
+        .help("Во весь экран macOS гасит остальные мониторы. Применяется при следующем запуске")
+    }
+
+    private var displayBinding: Binding<DisplayMode?> {
+        Binding(
+            get: { library.displayModes[bottle.name] },
+            set: { mode in
+                guard let mode else { return }
+                Task { await library.setDisplayMode(mode, of: bottle) }
+            }
+        )
     }
 
     private var rendererBinding: Binding<Renderer?> {

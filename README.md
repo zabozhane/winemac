@@ -30,6 +30,7 @@ git clone https://github.com/zabozhane/winemac.git ~/winemac
 | `run <bottle> [args]` | Запускает exe из его каталога, лог в `logs/<bottle>.log` |
 | `stop <bottle>` | `wineserver -k` для бутылки |
 | `renderer <bottle> [gl\|vulkan]` | Без значения печатает текущий бэкенд Direct3D (`gl` по умолчанию); со значением пишет `HKCU\Software\Wine\Direct3D\renderer`, действует со следующего запуска |
+| `display <bottle> [window [WxH]\|fullscreen]` | Без значения печатает режим экрана (`window 1600x1000` по умолчанию); со значением запоминает его для бутылки. `run` перед каждым запуском прописывает режим в `system/Option.ini` клиента L2 (`StartupFullScreen`, `GamePlayViewportX/Y`): во весь экран Wine захватывает все мониторы и остальные становятся чёрными. В игре режим переключается и через Alt+Enter |
 | `server attach <bottle> <dir>` | Связывает бутылку с серверным проектом на `docker compose` (например `~/Projects/l2aiserver`): перед `run` сервер поднимается, клиент стартует только когда сервер готов |
 | `server detach <bottle>` | Бутылка снова запускается без сервера |
 | `server status` | Состояние Docker, MariaDB, login, game и Ollama: `ready`, `starting`, `stopped`, `failed`, `unavailable` |
@@ -56,6 +57,7 @@ open ~/winemac/WineMac.app
 | Добавить игру | `create` (если бутылки нет) → `deps` → `import` |
 | Играть / Стоп | `run` / `stop` |
 | Рендер OpenGL / Vulkan | `renderer` |
+| Экран: В окне / Весь экран | `display` |
 | Проверить изоляцию | `audit` |
 | Блок «Локальный сервер» | `server status` раз в 3 с, кнопки `server up` / `server down` |
 | Удалить игру | `remove` (список берётся из вывода CLI, ответ на `[y/N]` уходит в stdin) |

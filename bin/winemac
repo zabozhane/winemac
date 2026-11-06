@@ -26,7 +26,10 @@ typeset -ra RENDERERS=(gl vulkan)   # wined3d backends; gl is Wine's default
 typeset -ra DISPLAY_MODES=(window fullscreen)
 # Windowed by default: a fullscreen game makes Wine's Mac driver capture every display,
 # which blacks out the other monitors until the game exits.
-typeset -r DEFAULT_DISPLAY="window 1920x1080"
+typeset -r DEFAULT_DISPLAY="window auto"
+# "auto": this size, shrunk (keeping 16:9) to fit the primary screen below the menu bar.
+typeset -ri AUTO_MAX_WIDTH=1920 AUTO_MAX_HEIGHT=1080
+typeset -ri TITLE_BAR_HEIGHT=32   # the window's title bar must stay visible to drag it
 
 # ---------- output ----------
 
@@ -46,7 +49,7 @@ Usage: winemac <command> [args]
   run     <bottle> [args...]    Launch the imported exe
   stop    <bottle>              Kill every Wine process of the bottle
   renderer <bottle> [gl|vulkan] Print or set the Direct3D backend (applies on next launch)
-  display <bottle> [window [WxH]|fullscreen]
+  display <bottle> [window [auto|WxH]|fullscreen]
                                 Print or set how the game starts (default: $DEFAULT_DISPLAY)
   server attach <bottle> <dir>  Start the docker compose server in <dir> before the bottle runs
   server detach <bottle>        Run the bottle without the server
@@ -347,6 +350,30 @@ current_display() {
   if [[ -f $file ]]; then print -r -- "$(<$file)"; else print -r -- "$DEFAULT_DISPLAY"; fi
 }
 
+# Visible frame (without menu bar and Dock) of the primary screen, in points: "<W> <H>".
+primary_screen_visible_size() {
+  osascript -l JavaScript -e '
+    ObjC.import("AppKit");
+    var f = $.NSScreen.screens.js[0].visibleFrame;
+    Math.floor(f.size.width) + " " + Math.floor(f.size.height)
+  ' 2>/dev/null
+}
+
+# A window larger than the screen is clamped to it by macOS and its title bar ends up under
+# the menu bar, so it can no longer be dragged to another monitor.
+auto_window_size() {
+  local -a screen=(${=$(primary_screen_visible_size)})
+  local -i width=AUTO_MAX_WIDTH height=AUTO_MAX_HEIGHT
+  if (( $#screen == 2 )); then
+    local -i max_width=screen[1] max_height=$(( screen[2] - TITLE_BAR_HEIGHT ))
+    if (( width > max_width )); then (( height = height * max_width / width, width = max_width )); fi
+    if (( height > max_height )); then (( width = width * max_height / height, height = max_height )); fi
+  else
+    width=1600 height=900   # screen unknown: fits every Mac screen
+  fi
+  print -r -- "$(( width / 2 * 2 ))x$(( height / 2 * 2 ))"
+}
+
 # The L2 client reads the startup mode from system/Option.ini ([Video] StartupFullScreen and
 # GamePlayViewportX/Y) and rewrites the file on exit, so the bottle's setting is applied before
 # every launch. Other games have no Option.ini and are left alone.
@@ -359,6 +386,7 @@ apply_display() {
     fullscreen=True
   else
     local size=${display#window }
+    [[ $size == auto ]] && size=$(auto_window_size)
     width=${size%%x*} height=${size##*x}
   fi
   if [[ ! -f $option_ini ]]; then
@@ -389,7 +417,7 @@ apply_display() {
     END { if (in_video && !done) emit_missing() }
   ' "$option_ini" > "$tmp"
   mv -f "$tmp" "$option_ini"
-  info "Display: $(current_display $name)"
+  info "Display: $display${width:+ (${width}x$height)}"
 }
 
 cmd_display() {
@@ -406,8 +434,8 @@ cmd_display() {
       (( $# == 2 )) || die "fullscreen takes no size"
       value=fullscreen ;;
     window)
-      local size=${3:-${DEFAULT_DISPLAY#window }}
-      [[ $size =~ '^[1-9][0-9]{2,4}x[1-9][0-9]{2,4}$' ]] || die "invalid size '$size' (expected WxH, e.g. 1920x1080)"
+      local size=${3:-auto}
+      [[ $size == auto || $size =~ '^[1-9][0-9]{2,4}x[1-9][0-9]{2,4}$' ]] || die "invalid size '$size' (expected auto or WxH, e.g. 1600x900)"
       value="window $size" ;;
     *) die "unknown display mode '$mode' (expected: ${DISPLAY_MODES[*]})" ;;
   esac

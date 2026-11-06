@@ -27,7 +27,7 @@ git clone https://github.com/zabozhane/winemac.git ~/winemac
 | `create <bottle>` | `wineboot --init`, отключение `winemenubuilder` в реестре, `winetricks sandbox` |
 | `deps <bottle> [verbs]` | `winetricks -q`, по умолчанию `d3dx9 vcrun2005 vcrun2008` |
 | `import <bottle> <dir> <exe>` | Копирует папку игры в `drive_c/Games/<имя папки>` и запоминает путь к exe |
-| `run <bottle> [args]` | Запускает exe из его каталога, лог в `logs/<bottle>.log` |
+| `run <bottle> [args]` | Запускает exe из его каталога, лог в `logs/<bottle>.log`: время старта, ошибки Wine (`WINEDEBUG=-all,err+all`) и строка с кодом выхода и временем работы. Код 5 значит `0xC0000005`, падение по доступу к памяти |
 | `stop <bottle>` | `wineserver -k` для бутылки |
 | `renderer <bottle> [gl\|vulkan]` | Без значения печатает текущий бэкенд Direct3D (`gl` по умолчанию); со значением пишет `HKCU\Software\Wine\Direct3D\renderer`, действует со следующего запуска |
 | `display <bottle> [window [WxH]\|fullscreen]` | Без значения печатает режим экрана (`window 1600x1000` по умолчанию); со значением запоминает его для бутылки. `run` перед каждым запуском прописывает режим в `system/Option.ini` клиента L2 (`StartupFullScreen`, `GamePlayViewportX/Y`): во весь экран Wine захватывает все мониторы и остальные становятся чёрными. В игре режим переключается и через Alt+Enter |
